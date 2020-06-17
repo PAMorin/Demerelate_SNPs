@@ -1,0 +1,272 @@
+---
+title: "DemeRelate"
+author: "Phil Morin"
+date: "6/8/2020"
+output:
+  word_document: default
+  pdf_document: default # does not knit to pdf (Latex issues)
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## DemeRelate
+Package: Demerelate
+Version: 0.9-3
+Date: 2017-03-02
+Title: Functions to Calculate Relatedness on Diploid Genetic Data
+
+Publication:
+Kraemer, P., Gerlach, G., 2017. Demerelate: calculating interindividual relatedness for kinship analysis based on codominant diploid genetic markers using R. Molecular Ecology Resources 17, 1371-1377. https://doi.org/10.1111/1755-0998.12666
+
+Script developed June, 2020 by Phillip Morin with help from Philipp Kraemer and Sam Woodman.
+R: v. 3.6.3
+RStudio: v. 1.3.959
+Demerelate: v. 0.9-3
+strataG: v. 2.4.905
+
+```{r echo=FALSE}
+rm(list = ls())
+library(Demerelate)
+library(strataG)
+library(tidyverse)
+
+# x <- installed.packages(); x[ is.na(x[,"Priority"]), c("Package", "Version")] # for all packages
+DemeRelate_v<-packageVersion("Demerelate")
+strataG_v<-packageVersion("strataG")
+tidyverse_v<-packageVersion("tidyverse")
+
+paste("Demerelate version v. ", DemeRelate_v)
+paste("strataG version v. ", strataG_v)
+paste("tidyverse version v. ", tidyverse_v)
+```
+
+
+## Import data
+
+Example input. Every dataframe in Demerelate should be organized in this way.
+
+Sample-ID	Population	locus.1.a	locus.1.b	locus.2.a	locus.2.b	...
+Ind.Norway.01	Norway	001	002	001	002	...
+Ind.Norway.02	Norway	001	003	002	005	...
+
+For SNP data, need to load and convert genotype data and stratification file.
+
+load and format data from csv files for genotypes and stratification schemes (for gtypes object used by strataG package), and remove monomorphic loci for specified strata.
+```{r echo=TRUE}
+stratum <- "Wcoast4_num" 
+title <- "DemeRelate"
+estimator <-"wang"
+
+# Data and strata files (including path)
+geno.df<-"example_100_loci_genotable.csv"
+strata.df<-"Strata_example_Ppho.csv"
+
+# read genotypes data file (diploid, codominant); in directory above current directory
+# Format = 1st column = labid, 2 columns per locus
+gdata <- read.csv(geno.df, header = TRUE) 
+#sample id column = 'labid', missing data as NA, 00, 000, -999
+
+####################################################################
+# Remove loci (optional, if any specific loci need to be removed from the data set)
+# Loci to be removed in csv file in which each locus listed in a row as loc.1, loc.2 for the 2 columns (e.g., Loc_10.1, Loc_10.2)
+
+## Rem_loc <- read.csv("Final_dbRDA_Candidates_outer.csv") 
+## rll <- as.vector(t(Rem_loc))
+## gdata <- gdata[ , !(names(gdata) %in% rll)]
+
+####################################################################
+
+# read stratification file (includes lat/lon coordinates)
+# required columns for sample ID ("labid"), Latitude, Longitude. After that, each column is a stratification scheme with strata names for each sample in the strata.
+coord <- read.csv(strata.df, header = TRUE, na.strings=c("","NA"))
+# change labid column header name
+colnames(coord)[colnames(coord) == "LABID"] <- "labid"
+
+# combine data with coordinates (files can be different lengths)
+# select the specified stratum along with labid, Latitude and Longitude from the strata file
+strata.df.names <- c("labid", "Latitude", "Longitude", stratum)
+coord.strat <- coord[,colnames(coord) %in% strata.df.names]
+# then merge dataframes based on "labid" being a column name in both dataframes
+data <- merge(coord.strat,gdata)
+
+## Optional ## remove sample data if not included in the specified strata
+data2 <- data %>% drop_na(all_of(stratum))
+## Note: Using an external vector in selections is ambiguous.
+## ℹ Use `all_of(stratum)` instead of `stratum` to silence this message.
+## ℹ See <https://tidyselect.r-lib.org/reference/faq-external-vector.html>.
+
+# remove sample data if it doesn't have lat/lon
+data2 <- data2 %>% drop_na(Latitude)
+# Remove monomorphic loci then ane write a file of monomorphic loci for this stratification scheme.
+other<-data2 %>% dplyr::select(labid, Latitude, Longitude) #create dataframe to add Lat/Lon to gtypes object (labid, Latitude, Longitude)
+g <- df2gtypes(data2, #this creates a df with 2 columns for id and hap
+               ploidy = 2,
+               id.col = 1,
+               strata.col = 4,
+               loc.col = 5,
+               other = other,
+               description = title)
+alleleNum<-numAlleles(g)
+row.names(alleleNum) <- alleleNum$locus
+# not.mono <- names(alleleNum)[alleleNum > 1]
+not.mono <- alleleNum$locus[alleleNum$num.alleles > 1]
+not.mono.g <- g[, not.mono, ]
+not.mono.df <- as.data.frame(not.mono.g)
+not.mono.df$labid<-not.mono.df$id
+not.mono.df$id<-NULL
+# Add the lat/lon data back to the dataframe
+data3<-merge(not.mono.df,other)
+# re-order the dataframe to put Lat/Lon columns after labid's
+latlon <- c("labid", "Latitude", "Longitude")
+data3 <- data3[, c(latlon, setdiff(names(data3), latlon))]
+data3 <- data3 %>% arrange(stratum, labid) # sort by strata column (ascending)
+
+# For DemeRelate, remove lat/lon columns
+data4 <- data3[,-c(2:3)]
+
+# remove underscores from strata names
+data4$stratum <- gsub("[_]", "", data4$stratum)
+# Remove underscores from column heading names
+names(data4) <- gsub( "_",  "", names(data4), fixed = TRUE)
+
+# save list of monomorphic loci to a .csv file
+mono<-subset(alleleNum,num.alleles < 2)
+# monoloc<-names(mono) [which(mono==TRUE)]
+write.csv(mono, paste0(stratum,"_monomorphic_loci.csv"))
+cat("there were", length(mono), "monomorphic loci, saved to file:", paste0(stratum,"_monomorphic_loci.csv"))
+
+data4[1:10,1:6]
+```
+
+
+
+## Summary stats
+```{r}
+# Show summary stats
+SNP_sum <- summary(not.mono.g)# , by.strta
+write.csv(SNP_sum, paste(title,"_",stratum, "_SNPsummary.csv", sep = ""))
+
+# Run all locus summaries
+locus.smry <- summarizeLoci(not.mono.g)
+write.csv(locus.smry, file = paste(title, "_",stratum,"_locus_summary.csv"))
+
+# Run individual summaries
+ind.smry <- summarizeInds(not.mono.g)
+write.csv(ind.smry, file = paste(title, "_",stratum,"_Indiv_summary.csv"))
+
+# summarize individuals, loci, and check for duplicates (this takes longer, so best to do individual locus and individual summaries if duplicates already removed)
+# summarizeAll(g, write.files = TRUE)
+```
+
+
+
+## convert data from character to number
+First column contains sample IDs (mode=character), which must be unique. However, no proofreading is implemented yet, but double named individuals may lead to errors or strange results. Column two contains population information (mode=factor). Pairwise relatedness is only calculated within populations. If you want to compare pairwise individual comparisons of several populations you need to build a new fictive population. You should do that with caution, since hidden population structures may produce strange results. Column three and four containing two alleles of a diploid marker for the sample defined in column one. Each marker should be appended in pairwise columns from then on. Allele size should be sorted in columns with the small allele in the odd numbered column and the bigger in even numbered column for convenience. However, Demerelate will take care of not sorted allele sizes and handle it correctly.
+```{r echo=TRUE}
+# Convert SNP/microhaplotype genotypes from text to numbers using factor levels for alleles
+
+# remove ID and population columns
+gdata_ID <- as.character(data4[,1])
+gdata_pop <-as.factor(data4[,2])
+gdata1 <- data4[,3:ncol(data4)]
+# gdata_ID_pop <- (data4[,1:2])
+
+# Get unique alleles for each locus
+locus.names <- unique(sapply(str_split(names(data4[, 3:ncol(data4)]), "[.]"), function(i) i[1]))
+
+allele.count <- sapply(locus.names, function(i) {
+  x <- data4 %>% select(starts_with(paste0(i, ".")))
+  if (ncol(x) != 2) stop("More than two columns selected for ", i)
+  length(sort(unique(unlist(x))))
+})
+allele.count.sum <- as.data.frame(table(allele.count, useNA = "always"))
+write_csv(allele.count.sum, paste0(title,"_",stratum,"_allele_count_sum.csv"))
+
+gdata1.fac.list <- lapply(locus.names, function(i) {
+  x <- data4 %>% select(starts_with(paste0(i, ".")))
+  if (ncol(x) != 2) stop("More than two columns selected for ", i)
+  x.uniq <- sort(unique(unlist(x)))
+  if (length(x.uniq) > 9) warning("More than nine alleles for ", i)
+  
+  data.frame(lapply(x, factor, levels = x.uniq))
+})
+gdata1.fac <- bind_cols(gdata1.fac.list)
+
+gdata1.num <- data.frame(lapply(gdata1.fac, as.integer))
+
+# re-combine sample, population and genotype columns
+gdata2 <- cbind(gdata_ID,gdata_pop,gdata1.num)
+
+gdata2$gdata_ID <- as.character(gdata2$gdata_ID)
+
+write_csv(gdata2, col_names = TRUE, paste0(title,"_",stratum,"_gdata_integer.csv"))
+
+gdata2[1:10,1:6]
+```
+
+
+
+## Loci test
+run Loci.test to determine number of loci needed for estimating relatedness
+Some estimators are not defined for bi-allelics, ritland and queller and goodknights rxy will lead to errors if used with SNP data.
+```{r echo=TRUE, cache=TRUE, results='hide'}
+# test data set; bt=number of bootstrap replicates (set to 1000 after testing)
+#   data("demerelpop")
+#   demerelpop[1:10,1:10]
+#   demerelpop.df <- demerelpop
+#   Loci.test(demerelpop.df, bt=10, ref.pop=NA, object=TRUE, value="rxy", file.output=TRUE)
+
+# empirical data set # increase bootstrap (bt) to 1000 after testing; may take ≥several hours (took ~10-15 min for 10reps with 281 samples, 291 loci)
+Loci.test(gdata2, bt=5, ref.pop = NA, object=TRUE, value = estimator, file.output=TRUE)
+```
+
+
+## DemeRelate information
+Head function of Demerelate. This function should be called if any estimation of relatedness is intended. Additionally, some F-statistics can be calculated. Default parameters are set for convenient usage. Only an input dataframe containing allelic information is necessary. Geographical distances, reference populations or alterations on statistics can be set by adapting parameters.
+
+Usage
+     Demerelate(inputdata, tab.dist = "NA", ref.pop = "NA", 
+                object = FALSE, value = "Mxy", Fis = FALSE,
+                file.output = FALSE, p.correct = FALSE,
+                iteration = 1000, pairs = 1000, 
+                dis.data = "relative", NA.rm = TRUE,
+                genotype.ref = TRUE)
+                
+B_{xy} (number of alleles shared) as described in Li and Horvitz 1953 (Bxy).
+S_{xy} (number of alleles shared) as described in Lynch 1988 (Sxy).
+M_{xy} (genotype sharing) as described in Blouin et al. 1996 (Mxy).
+Li is based on the equations from Li et al. 1993 (Li).
+The estimator r_{xy} based on Queller and Goodnight 1989 adapted to pairwise comparisons as described in Oliehoek et al. 2006 (rxy).
+l_{xy} is calculated based on Lynch and Ritland 1999 (lxy, lxy.w).
+The estimator loiselle is based on Loiselle et al. 1995 (loiselle).
+The estimator wang.fin is based on Wang 2002 for a finite sample (wang.fin, wang.fin.w).
+The estimator wang is based on Wang 2002 including bias correction for sample size (wang, wang.w).
+The estimator ritland is based on Ritland 1996 (ritland).
+The estimator morans.fin is based on Hardy and Vekemans 1999 ommiting correction for sample size (morans.fin).
+The estimator morans is based on Hardy and Vekemans 1999 with correction for sample size bias (morans.fin, morans.w).
+
+## Relatedness estimator
+```{r echo=TRUE, cache=TRUE, results='hide', message=FALSE, warning=FALSE}
+
+# allele sharing methods (value = ): Can be set as "Bxy", "Sxy", "Mxy", "Li", "lxy", "rxy", "loiselle", "wang.fin", "wang", "ritland", "morans.fin" or "morans" allele.sharing.
+
+# Some estimators are not defined for bi-allelics, ritland and queller and goodknights rxy will lead to errors here.
+D <- Demerelate(gdata2, tab.dist = "NA", ref.pop = NA, object = TRUE,
+           value = estimator,  
+           Fis = FALSE,
+           file.output = TRUE,
+           p.correct = FALSE,
+           iteration = 10,  # increase to 1000 after testing
+           pairs = 10,      # increase to 1000 after testing
+           dis.data = "relative",
+           NA.rm = FALSE,
+           genotype.ref = TRUE)
+
+```
+
+## Save data
+```{r cache=TRUE}
+save.image(file=paste0(title, "_", stratum, "_",estimator,".Rdata"))
+```
