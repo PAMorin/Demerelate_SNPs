@@ -3,8 +3,9 @@ title: "DemeRelate"
 author: "Phil Morin"
 date: "6/8/2020"
 output:
-  word_document: default
-  pdf_document: default # does not knit to pdf (Latex issues)
+  #word_document: default
+  #pdf_document: default # does not knit to pdf (Latex issues)
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
